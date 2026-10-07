@@ -1,0 +1,49 @@
+--- a/configure
++++ b/configure
+@@ -6834,7 +6834,10 @@
+ # check for some common methods of building with pthread support
+ # do this before the optional library checks as some of them require pthreads
+ if ! disabled pthreads && ! enabled w32threads && ! enabled os2threads; then
+-    if check_lib pthreads pthread.h pthread_join   -pthread &&
++    if check_lib pthreads pthread.h pthread_join -lemfiberthreads &&
++       check_lib pthreads pthread.h pthread_create -lemfiberthreads; then
++        add_cflags -lemfiberthreads
++    elif check_lib pthreads pthread.h pthread_join   -pthread &&
+        check_lib pthreads pthread.h pthread_create -pthread; then
+         add_cflags -pthread
+     elif check_lib pthreads pthread.h pthread_join   -pthreads &&
+--- a/fftools/ffmpeg_sched.c
++++ b/fftools/ffmpeg_sched.c
+@@ -1808,15 +1808,14 @@
+ {
+     int ret;
+ 
+-    // convert delay to absolute timestamp
+-    timeout_us += av_gettime();
+-
+     pthread_mutex_lock(&sch->finish_lock);
+ 
+     if (sch->nb_mux_done < sch->nb_mux) {
+-        struct timespec tv = { .tv_sec  =  timeout_us / 1000000,
+-                               .tv_nsec = (timeout_us % 1000000) * 1000 };
+-        pthread_cond_timedwait(&sch->finish_cond, &sch->finish_lock, &tv);
++        // JS timers cannot fire during the synchronous command call. Yield to
++        // the pipeline, then let the caller check progress and cancellation.
++        pthread_mutex_unlock(&sch->finish_lock);
++        pthread_yield();
++        pthread_mutex_lock(&sch->finish_lock);
+     }
+ 
+     // abort transcoding if any task failed
+--- a/fftools/ffmpeg_demux.c
++++ b/fftools/ffmpeg_demux.c
+@@ -765,6 +765,9 @@
+         unsigned send_flags = 0;
+ 
+         ret = av_read_frame(f->ctx, dt.pkt_demux);
++        // A cooperative task must stop before restarting a cancelled loop.
++        if (ret == AVERROR_EXIT)
++            break;
+ 
+         if (ret == AVERROR(EAGAIN)) {
+             av_usleep(10000);

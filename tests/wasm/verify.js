@@ -65,6 +65,10 @@ run.onclick = async () => {
     return JSON.parse(await ffmpeg.readFile(file, "utf8"));
   };
   try {
+    assert(
+      !crossOriginIsolated && typeof SharedArrayBuffer === "undefined",
+      "Run these checks without cross-origin isolation or SharedArrayBuffer",
+    );
     report.build = selected;
     const base =
       selected === "cross"
