@@ -10,7 +10,7 @@ Module["reset"] = () => {
   Module["ret"] = -1;
 };
 let poisoned = false;
-function runFFmpeg(entry, args) {
+function runFFmpeg(probe, args) {
   if (poisoned)
     throw new Error("FFmpeg runtime failed; terminate and reload the worker");
   const pointers = [];
@@ -27,7 +27,7 @@ function runFFmpeg(entry, args) {
     if (!argv) throw new Error("FFmpeg argument allocation failed");
     pointers.forEach((ptr, i) => Module["setValue"](argv + i * 4, ptr, "i32"));
     Module["setValue"](argv + pointers.length * 4, 0, "i32");
-    Module["ret"] = entry(args.length, argv);
+    Module["_ffmpeg_wasm_run"](probe, args.length, argv);
   } catch (error) {
     poisoned = true;
     throw error;
@@ -41,17 +41,15 @@ function runFFmpeg(entry, args) {
   return Module["ret"];
 }
 Module["exec"] = (...args) =>
-  runFFmpeg(Module["_ffmpeg_wasm_main"], [
+  runFFmpeg(0, [
     "./ffmpeg",
     "-nostdin",
     "-y",
     ...args,
   ]);
 Module["ffprobe"] = (...args) =>
-  runFFmpeg(Module["_ffprobe_wasm_main"], ["./ffprobe", ...args]);
-if (!ENVIRONMENT_IS_PTHREAD) {
-  if (!globalThis.crossOriginIsolated)
-    throw new Error("FFmpeg requires cross-origin isolation (COOP/COEP)");
+  runFFmpeg(1, ["./ffprobe", ...args]);
+{
   const scriptURL = Module["mainScriptUrlOrBlob"];
   if (typeof scriptURL !== "string" || !scriptURL.includes("#"))
     throw new Error("Load this core through @ffmpeg/ffmpeg");
@@ -59,15 +57,4 @@ if (!ENVIRONMENT_IS_PTHREAD) {
   const { wasmURL } = JSON.parse(atob(scriptURL.slice(separator + 1)));
   Module["locateFile"] = (path, prefix) =>
     path.endsWith(".wasm") ? wasmURL : prefix + path;
-  const coreURL = scriptURL.slice(0, separator);
-  if (new URL(coreURL).origin !== self.location.origin) {
-    // Worker constructors require a same-origin URL even when importScripts
-    // can load a cross-origin core. The pool is ready before postRun executes.
-    const bootstrap = new Blob([`importScripts(${JSON.stringify(coreURL)});`], {
-      type: "application/javascript",
-    });
-    const workerURL = URL.createObjectURL(bootstrap);
-    Module["mainScriptUrlOrBlob"] = workerURL;
-    Module["postRun"] = [() => URL.revokeObjectURL(workerURL)];
-  }
 }
