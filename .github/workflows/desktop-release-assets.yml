@@ -1,0 +1,101 @@
+name: Desktop Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to download and verify
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  FFMPEG_WORKSPACE: ${{ github.workspace }}-build
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }} release asset
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-22.04 }
+          - { arch: arm64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils curl python3 ripgrep unzip
+
+      - name: Download release asset
+        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" linux-${{ matrix.arch }}
+
+      - name: Verify release asset
+        run: scripts/verify-desktop-cli.sh "$FFMPEG_WORKSPACE/release-assets/${{ github.event.inputs.tag }}/linux-${{ matrix.arch }}"
+
+  macos:
+    name: macOS universal release asset on ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, runner: macos-latest }
+          - { arch: x64, runner: macos-15-intel }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install host tools
+        run: brew install ripgrep
+
+      - name: Download release asset
+        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" darwin-universal
+
+      - name: Verify release asset
+        run: scripts/verify-desktop-cli.sh "$FFMPEG_WORKSPACE/release-assets/${{ github.event.inputs.tag }}/darwin-universal"
+
+  windows:
+    name: Windows ${{ matrix.arch }} release asset
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-2022 }
+          - { arch: arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download release asset
+        shell: bash
+        run: scripts/download-release-desktop-assets.sh "${{ github.event.inputs.tag }}" windows-${{ matrix.arch }}
+
+      - name: Verify release asset
+        shell: pwsh
+        run: |
+          python tests/desktop_cli/verify_media.py `
+            --ffmpeg "$env:FFMPEG_WORKSPACE/release-assets/${{ github.event.inputs.tag }}/windows-${{ matrix.arch }}/ffmpeg.exe" `
+            --ffprobe "$env:FFMPEG_WORKSPACE/release-assets/${{ github.event.inputs.tag }}/windows-${{ matrix.arch }}/ffprobe.exe" `
+            --work-dir "$env:FFMPEG_WORKSPACE/work" `
+            --target windows-${{ matrix.arch }}

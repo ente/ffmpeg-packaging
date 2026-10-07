@@ -1,0 +1,104 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FFMPEG_WORKSPACE: ${{ github.workspace }}-build
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            curl \
+            patch \
+            python3 \
+            ripgrep \
+            xz-utils
+
+      - name: Shell syntax
+        run: |
+          for script in scripts/*.sh tests/runtime/run-mobile-harness.sh; do
+            bash -n "$script"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/desktop_cli/verify_media.py")
+          compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          PY
+
+      - name: Reject local placeholders
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_paths=(README.md docs include patches scripts src tests versions.env)
+          set +e
+          rg -n "/Vol""umes|/Us""ers/|TO""DO|FIX""ME" "${scan_paths[@]}"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 1
+          fi
+          if [ "$status" -gt 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Check public header ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! rg -n "struct FfmpegSession[[:space:]]*\\{" include/ffmpeg_runtime.h
+          ci_work="$FFMPEG_WORKSPACE/work/ci"
+          mkdir -p "$ci_work"
+          cat > "$ci_work/header-smoke.c" <<'EOF'
+          #include "include/ffmpeg_runtime.h"
+
+          int main(void) {
+              FfmpegSession *session = ffmpeg_session_new(0, 0);
+              ffmpeg_cancel(session);
+              ffmpeg_session_free(session);
+              return 0;
+          }
+          EOF
+          clang -fsyntax-only -I. "$ci_work/header-smoke.c"
+          clang -fsyntax-only -Iinclude tests/runtime/ffmpeg_runtime_harness.c
+
+      - name: Check FFmpeg patch and wrapper source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/common.sh
+          ci_work="$FFMPEG_WORKSPACE/work/ci"
+          mkdir -p "$ci_work"
+          curl -fL "$FFMPEG_URL" -o "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz"
+          printf '%s  %s\n' "$FFMPEG_SHA256" "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz" | sha256sum -c -
+          tar -xf "$ci_work/ffmpeg-$FFMPEG_VERSION.tar.xz" -C "$ci_work"
+          ffmpeg_tree="$ci_work/ffmpeg-$FFMPEG_VERSION"
+          patch_file="$(boundary_patch)"
+          scripts/validate-fftools-state-audit.sh "$ffmpeg_tree"
+          (cd "$ffmpeg_tree" && patch -p1 --dry-run < "$patch_file")
+          (
+            cd "$ffmpeg_tree"
+            patch -p1 < "$patch_file"
+            ./configure --disable-x86asm --disable-doc --disable-ffplay --disable-ffprobe >/dev/null
+            make -j2 ffmpeg >/dev/null
+          )
+          clang -fsyntax-only -I"$ffmpeg_tree" src/ffmpeg_runtime_probe.c
