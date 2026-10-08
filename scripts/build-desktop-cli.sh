@@ -78,6 +78,18 @@ build_one_desktop() {
   local extra_cflags=""
   local extra_ldflags=""
   local ffmpeg_cross_flags=()
+  if [ "$DESKTOP_OS" = "linux" ]; then
+    local bzip2_src="$target_root/bzip2-$BZIP2_VERSION"
+    local bzip2_archive="$DOWNLOADS_ROOT/bzip2-$BZIP2_VERSION.tar.gz"
+    curl -fL "https://sourceware.org/pub/bzip2/bzip2-$BZIP2_VERSION.tar.gz" -o "$bzip2_archive"
+    verify_sha256 "$bzip2_archive" "$BZIP2_SHA256"
+    tar -xf "$bzip2_archive" -C "$target_root"
+    extra_cflags="-fstack-protector-strong -D_FORTIFY_SOURCE=2 -I$bzip2_src"
+    extra_ldflags="-L$bzip2_src -pie -Wl,-z,relro,-z,now"
+    make -C "$bzip2_src" -j"$JOBS" libbz2.a \
+      CC="$cc" AR="$ar" RANLIB="$ranlib" CFLAGS="-O2 -fPIC $extra_cflags"
+    ffmpeg_cross_flags+=(--enable-pic --enable-bzlib --enable-lzma --disable-xlib)
+  fi
   if [ "$DESKTOP_OS" = "darwin" ]; then
     export MACOSX_DEPLOYMENT_TARGET="$DESKTOP_MACOS_MIN_VERSION"
     extra_cflags="-arch $DESKTOP_ARCH"
@@ -263,10 +275,18 @@ case "$target" in
     ;;
   *)
     archive="$out/ffmpeg.tar.gz"
-    tar -C "$out" -czf "$archive" ffmpeg ffprobe dav1d-COPYING
+    files=(ffmpeg ffprobe dav1d-COPYING)
+    if [[ "$target" == desktop-linux-* ]]; then
+      cp "$BUILD_ROOT/$target/bzip2-$BZIP2_VERSION/LICENSE" "$out/bzip2-LICENSE"
+      files+=(bzip2-LICENSE)
+    fi
+    tar -C "$out" -czf "$archive" "${files[@]}"
     ;;
 esac
 sha256_file "$archive" > "$archive.sha256"
 write_manifest "$archive.manifest.env" "TARGET=$target" "ARTIFACT=$archive" \
   "DAV1D_VERSION=$DAV1D_VERSION" "DAV1D_SHA256=$DAV1D_SHA256"
+if [[ "$target" == desktop-linux-* ]]; then
+  printf 'BZIP2_VERSION=%s\nBZIP2_SHA256=%s\n' "$BZIP2_VERSION" "$BZIP2_SHA256" >> "$archive.manifest.env"
+fi
 log "built desktop artifact $archive"

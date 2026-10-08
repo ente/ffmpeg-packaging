@@ -60,32 +60,28 @@ if command -v ldd >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
   fi
 fi
 
-if command -v objdump >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
+if [ "$(uname -s)" = "Linux" ]; then
+  require_cmd readelf
   for binary in "$ffmpeg" "$ffprobe"; do
-    glibc_report="$WORK_ROOT/$(basename "$binary")-glibc-symbols.txt"
-    objdump -T "$binary" | rg -o 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu > "$glibc_report" || true
-    python3 - "$binary" "$glibc_report" "$DESKTOP_LINUX_MAX_GLIBC" <<'PY'
+    report="$WORK_ROOT/$(basename "$binary")-elf.txt"
+    LC_ALL=C readelf --wide --version-info "$binary" > "$report"
+    python3 - "$binary" "$report" "$DESKTOP_LINUX_MAX_GLIBC" \
+      "$DESKTOP_LINUX_MAX_GLIBCXX" "$DESKTOP_LINUX_MAX_CXXABI" <<'PYTHON'
+import re
 import sys
+from pathlib import Path
 
-binary, report, max_allowed = sys.argv[1:]
+binary, report, *limits = sys.argv[1:]
+text = Path(report).read_text(encoding="utf-8")
 
-def parse(version):
-    major, minor = version.split(".", 1)
-    return int(major), int(minor)
+def numeric(value):
+    return tuple(map(int, value.split(".")))
 
-with open(report, encoding="utf-8") as handle:
-    versions = sorted(
-        {line.strip().removeprefix("GLIBC_") for line in handle if line.strip()},
-        key=parse,
-    )
-if not versions:
-    raise SystemExit(0)
-highest = versions[-1]
-if parse(highest) > parse(max_allowed):
-    raise SystemExit(
-        f"{binary} requires GLIBC_{highest}; max allowed is GLIBC_{max_allowed}"
-    )
-PY
+for namespace, limit in zip(("GLIBC", "GLIBCXX", "CXXABI"), limits):
+    versions = re.findall(rf"\b{namespace}_([0-9.]+)", text)
+    if not versions or max(map(numeric, versions)) > numeric(limit):
+        raise SystemExit(f"{binary}: missing or unsupported {namespace} versions; maximum is {limit}")
+PYTHON
   done
 fi
 
