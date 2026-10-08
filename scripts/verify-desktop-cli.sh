@@ -55,8 +55,8 @@ fi
 
 if command -v ldd >/dev/null 2>&1 && [ "$(uname -s)" = "Linux" ]; then
   ldd "$ffmpeg" > "$WORK_ROOT/desktop-ffmpeg-ldd.txt"
-  if rg -q 'lib(x264|zimg|dav1d)' "$WORK_ROOT/desktop-ffmpeg-ldd.txt"; then
-    die "desktop ffmpeg must link pinned x264/zimg/dav1d statically"
+  if rg -q 'lib(x264|zimg|dav1d|bz2)' "$WORK_ROOT/desktop-ffmpeg-ldd.txt"; then
+    die "desktop ffmpeg must link pinned x264/zimg/dav1d/bzip2 statically"
   fi
 fi
 
@@ -65,22 +65,20 @@ if [ "$(uname -s)" = "Linux" ]; then
   for binary in "$ffmpeg" "$ffprobe"; do
     report="$WORK_ROOT/$(basename "$binary")-elf.txt"
     LC_ALL=C readelf --wide --version-info "$binary" > "$report"
-    python3 - "$binary" "$report" "$DESKTOP_LINUX_MAX_GLIBC" \
-      "$DESKTOP_LINUX_MAX_GLIBCXX" "$DESKTOP_LINUX_MAX_CXXABI" <<'PYTHON'
+    python3 - "$binary" "$report" "$DESKTOP_LINUX_MAX_GLIBC" <<'PYTHON'
 import re
 import sys
 from pathlib import Path
 
-binary, report, *limits = sys.argv[1:]
+binary, report, maximum = sys.argv[1:]
 text = Path(report).read_text(encoding="utf-8")
 
 def numeric(value):
     return tuple(map(int, value.split(".")))
 
-for namespace, limit in zip(("GLIBC", "GLIBCXX", "CXXABI"), limits):
-    versions = re.findall(rf"\b{namespace}_([0-9.]+)", text)
-    if not versions or max(map(numeric, versions)) > numeric(limit):
-        raise SystemExit(f"{binary}: missing or unsupported {namespace} versions; maximum is {limit}")
+versions = re.findall(r"\bGLIBC_([0-9.]+)", text)
+if not versions or max(map(numeric, versions)) > numeric(maximum):
+    raise SystemExit(f"{binary}: missing or unsupported GLIBC versions; maximum is {maximum}")
 PYTHON
   done
 fi

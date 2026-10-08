@@ -85,10 +85,10 @@ build_one_desktop() {
     verify_sha256 "$bzip2_archive" "$BZIP2_SHA256"
     tar -xf "$bzip2_archive" -C "$target_root"
     extra_cflags="-fstack-protector-strong -D_FORTIFY_SOURCE=2 -I$bzip2_src"
-    extra_ldflags="-L$bzip2_src -pie -Wl,-z,relro,-z,now"
+    extra_ldflags="-L$bzip2_src -Wl,-z,relro,-z,now"
     make -C "$bzip2_src" -j"$JOBS" libbz2.a \
       CC="$cc" AR="$ar" RANLIB="$ranlib" CFLAGS="-O2 -fPIC $extra_cflags"
-    ffmpeg_cross_flags+=(--enable-pic --enable-bzlib --enable-lzma --disable-xlib)
+    ffmpeg_cross_flags+=(--enable-pic --extra-ldexeflags=-pie --enable-bzlib --enable-lzma --disable-xlib)
   fi
   if [ "$DESKTOP_OS" = "darwin" ]; then
     export MACOSX_DEPLOYMENT_TARGET="$DESKTOP_MACOS_MIN_VERSION"
