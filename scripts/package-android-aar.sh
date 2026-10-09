@@ -51,7 +51,7 @@ for abi in arm64-v8a armeabi-v7a; do
   require_file "$wrapper"
   "$readelf_bin" -Ws "$wrapper" > "$WORK_ROOT/$abi-libffmpeg-runtime.symbols"
   "$readelf_bin" -d "$wrapper" > "$WORK_ROOT/$abi-libffmpeg-runtime.dynamic"
-  for symbol in ffmpeg_session_new ffmpeg_session_free ffmpeg_session_output ffmpeg_execute ffmpeg_cancel ffmpeg_probe_media_json ffmpeg_free_string; do
+  for symbol in ffmpeg_session_new ffmpeg_session_free ffmpeg_session_output ffmpeg_session_progress ffmpeg_execute ffmpeg_cancel ffmpeg_probe_media_json ffmpeg_free_string; do
     rg -q "[[:space:]]$symbol([[:space:]]|$)" "$WORK_ROOT/$abi-libffmpeg-runtime.symbols" ||
       die "$wrapper missing exported symbol $symbol"
   done

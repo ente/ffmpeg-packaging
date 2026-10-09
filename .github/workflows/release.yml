@@ -10,6 +10,10 @@ on:
         description: Mark the GitHub release as a prerelease
         required: true
         default: "true"
+      build_only:
+        description: Build and verify artifacts without publishing
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -330,6 +334,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
+    if: ${{ !inputs.build_only }}
     runs-on: ubuntu-24.04
     needs:
       - wasm

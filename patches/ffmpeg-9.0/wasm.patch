@@ -1,9 +1,10 @@
 --- a/fftools/ffmpeg.c
 +++ b/fftools/ffmpeg.c
-@@ -242,15 +242,48 @@
-         atomic_store(&session->cancel_requested, 1);
- }
- 
+@@ -150,6 +150,41 @@
+ static atomic_flag ffmpeg_runtime_execute_lock = ATOMIC_FLAG_INIT;
+ static int64_t ffmpeg_runtime_report_last_time = -1;
+ static int ffmpeg_runtime_report_first_report = 1;
++
 +static int wasm_timeout_ms = -1;
 +static int64_t wasm_deadline = INT64_MAX;
 +
@@ -27,29 +28,59 @@
 +    return av_gettime_relative() >= wasm_deadline;
 +}
 +
- static int ffmpeg_runtime_cancel_requested(void)
- {
-+    if (ffmpeg_wasm_cancelled())
-+        return 1;
-     return ffmpeg_runtime_active_session &&
-            atomic_load(&ffmpeg_runtime_active_session->cancel_requested);
- }
- 
 +void ffmpeg_wasm_progress(double progress, double time_us);
 +
- static void ffmpeg_runtime_forward_progress(int64_t pts, int is_final)
- {
-     FfmpegSession *session = ffmpeg_runtime_active_session;
++static void ffmpeg_wasm_report_progress(int64_t pts, int is_final)
++{
 +    if (pts != AV_NOPTS_VALUE) {
 +        const int64_t duration = nb_input_files ? input_files[0]->ctx->duration : 0;
 +        const double progress = is_final ? 1 : duration > 0 ?
 +            av_clipd((double)pts / duration, 0, 1) : 0;
 +        ffmpeg_wasm_progress(progress, pts);
 +    }
++}
  
-     if (!session || !session->progress_cb)
-         return;
-@@ -1257,7 +1290,11 @@
+ static void ffmpeg_runtime_reset_run_state(void)
+ {
+@@ -368,7 +403,8 @@
+ 
+ static int decode_interrupt_cb(void *ctx)
+ {
+-    return received_nb_signals > atomic_load(&transcode_init_done);
++    return ffmpeg_wasm_cancelled() ||
++           received_nb_signals > atomic_load(&transcode_init_done);
+ }
+ 
+ const AVIOInterruptCB int_cb = { decode_interrupt_cb, NULL };
+@@ -710,6 +746,7 @@
+ 
+     bitrate = pts != AV_NOPTS_VALUE && pts && total_size >= 0 ? total_size * 8 / (pts / 1000.0) : -1;
+     speed   = pts != AV_NOPTS_VALUE && t != 0.0 ? (double)pts / AV_TIME_BASE / t : -1;
++    ffmpeg_wasm_report_progress(pts, is_last_report);
+ 
+     if (total_size < 0) av_bprintf(&buf, "size=N/A time=");
+     else                av_bprintf(&buf, "size=%8.0fKiB time=", total_size / 1024.0);
+@@ -966,7 +1003,7 @@
+     while (!sch_wait(sch, stats_period, &transcode_ts)) {
+         int64_t cur_time= av_gettime_relative();
+ 
+-        if (received_nb_signals)
++        if (received_nb_signals || ffmpeg_wasm_cancelled())
+             break;
+ 
+         /* if 'q' pressed, exits */
+@@ -1109,7 +1146,9 @@
+           (ret == FFMPEG_ERROR_RATE_EXCEEDED) ?  69 : ret;
+ 
+ finish:
+-    if (ret == AVERROR_EXIT)
++    if (ffmpeg_wasm_cancelled())
++        ret = 255;
++    else if (ret == AVERROR_EXIT)
+         ret = 0;
+ 
+     ffmpeg_cleanup(ret);
+@@ -1123,7 +1162,11 @@
      return ret;
  }
  
@@ -61,7 +92,7 @@
 +{
 +    ffmpeg_wasm_begin();
 +    av_log_set_callback(av_log_default_callback);
-     return ffmpeg_execute(NULL, argc, argv);
+     return ffmpeg_execute(argc, argv);
  }
 --- a/fftools/ffprobe.c
 +++ b/fftools/ffprobe.c

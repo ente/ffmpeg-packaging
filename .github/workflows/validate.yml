@@ -72,7 +72,7 @@ jobs:
           #include "include/ffmpeg_runtime.h"
 
           int main(void) {
-              FfmpegSession *session = ffmpeg_session_new(0, 0);
+              FfmpegSession *session = ffmpeg_session_new();
               ffmpeg_cancel(session);
               ffmpeg_session_free(session);
               return 0;
@@ -98,6 +98,7 @@ jobs:
           (
             cd "$ffmpeg_tree"
             patch -p1 < "$patch_file"
+            patch -p1 < "$REPO_ROOT/patches/ffmpeg-${FFMPEG_VERSION%.*}/mobile.patch"
             ./configure --disable-x86asm --disable-doc --disable-ffplay --disable-ffprobe >/dev/null
             make -j2 ffmpeg >/dev/null
           )
