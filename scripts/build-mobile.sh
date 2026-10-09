@@ -44,7 +44,11 @@ mkdir -p "$deps_root" "$pkgconfig_dir" "$package_root"
 
 prepare_ffmpeg_tree() {
   copy_clean_tree "$(ffmpeg_source_dir)" "$ffmpeg_build"
-  (cd "$ffmpeg_build" && patch -p1 < "$(boundary_patch)")
+  (
+    cd "$ffmpeg_build"
+    patch -p1 < "$(boundary_patch)"
+    patch -p1 < "$REPO_ROOT/patches/ffmpeg-${FFMPEG_VERSION%.*}/mobile.patch"
+  )
 }
 
 compile_probe_wrapper() {
@@ -171,6 +175,7 @@ build_ios() {
 _ffmpeg_session_new
 _ffmpeg_session_free
 _ffmpeg_session_output
+_ffmpeg_session_progress
 _ffmpeg_execute
 _ffmpeg_cancel
 _ffmpeg_probe_media_json
@@ -324,6 +329,7 @@ build_android() {
     ffmpeg_session_new;
     ffmpeg_session_free;
     ffmpeg_session_output;
+    ffmpeg_session_progress;
     ffmpeg_execute;
     ffmpeg_cancel;
     ffmpeg_probe_media_json;

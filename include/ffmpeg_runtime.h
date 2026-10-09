@@ -7,20 +7,16 @@
 extern "C" {
 #endif
 
-typedef void (*ffmpeg_progress_callback)(void *opaque,
-                                         int64_t time_us,
-                                         int is_final);
-
 typedef struct FfmpegSession FfmpegSession;
 
-FfmpegSession *ffmpeg_session_new(ffmpeg_progress_callback progress_cb,
-                                     void *progress_opaque);
+FfmpegSession *ffmpeg_session_new(void);
 
-/* Free only after execute returns; no callbacks occur after that return. */
 void ffmpeg_session_free(FfmpegSession *session);
 
 /* Borrowed diagnostic bytes; truncation may split UTF-8. Read after execute. */
 const char *ffmpeg_session_output(FfmpegSession *session);
+
+int64_t ffmpeg_session_progress(FfmpegSession *session);
 
 /* A session runs once. Cancellation before execution is preserved. */
 int ffmpeg_execute(FfmpegSession *session, int argc, char **argv);

@@ -16,13 +16,6 @@
 
 #define ARGC(args) ((int)(sizeof(args) / sizeof((args)[0]) - 1))
 
-typedef struct HarnessStats {
-    atomic_int callbacks;
-    atomic_int callbacks_after_teardown;
-    atomic_int accept_callbacks;
-    int64_t last_progress_us;
-} HarnessStats;
-
 typedef struct ExecuteTask {
     FfmpegSession *session;
     int argc;
@@ -223,25 +216,6 @@ static int json_is_valid(const char *json)
     return end && *skip_json_ws(end) == '\0';
 }
 
-static void progress_cb(void *opaque, int64_t time_us, int is_final)
-{
-    HarnessStats *stats = opaque;
-
-    (void)is_final;
-    atomic_fetch_add(&stats->callbacks, 1);
-    if (!atomic_load(&stats->accept_callbacks))
-        atomic_fetch_add(&stats->callbacks_after_teardown, 1);
-    stats->last_progress_us = time_us;
-}
-
-static void stats_init(HarnessStats *stats)
-{
-    atomic_init(&stats->callbacks, 0);
-    atomic_init(&stats->callbacks_after_teardown, 0);
-    atomic_init(&stats->accept_callbacks, 1);
-    stats->last_progress_us = -1;
-}
-
 static void *execute_thread(void *opaque)
 {
     ExecuteTask *task = opaque;
@@ -273,26 +247,20 @@ static void *watchdog_thread(void *opaque)
 
 static int run_command(const char *name, int argc, char **argv, int expected)
 {
-    HarnessStats stats;
     FfmpegSession *session;
     int ret;
 
-    stats_init(&stats);
-    session = ffmpeg_session_new(progress_cb, &stats);
+    session = ffmpeg_session_new();
     if (!session) {
         fail(name, "session allocation failed");
         return -1;
     }
 
     ret = ffmpeg_execute(session, argc, argv);
-    atomic_store(&stats.accept_callbacks, 0);
-    usleep(200000);
 
     if (ret != expected) {
         fprintf(stderr, "%s returned %d, expected %d\n", name, ret, expected);
         fail(name, "unexpected return code");
-    } else if (atomic_load(&stats.callbacks_after_teardown) != 0) {
-        fail(name, "progress callback after callback teardown");
     } else {
         ok(name);
     }
@@ -303,7 +271,7 @@ static int run_command(const char *name, int argc, char **argv, int expected)
 
 static int execute_command_no_check(int argc, char **argv)
 {
-    FfmpegSession *session = ffmpeg_session_new(NULL, NULL);
+    FfmpegSession *session = ffmpeg_session_new();
     int ret;
 
     if (!session)
@@ -311,6 +279,57 @@ static int execute_command_no_check(int argc, char **argv)
     ret = ffmpeg_execute(session, argc, argv);
     ffmpeg_session_free(session);
     return ret;
+}
+
+static void run_progress(void)
+{
+    char *argv[] = {
+        "ffmpeg", "-hide_banner", "-stats_period", "0.05", "-re",
+        "-f", "lavfi", "-i", "testsrc2=duration=2:size=96x96:rate=10",
+        "-c:v", "libx264", "-preset", "ultrafast", "-f", "null", "-", NULL,
+    };
+    FfmpegSession *session = ffmpeg_session_new();
+    ExecuteTask task = { .session = session, .argc = ARGC(argv), .argv = argv };
+    pthread_t thread;
+    pthread_t watchdog;
+    WatchdogTask watchdog_task = { "progress", &task.done, 15000000 };
+    int updates = 0;
+    int64_t previous = -1;
+
+    if (!session) {
+        fail("progress", "session allocation failed");
+        return;
+    }
+    if (ffmpeg_session_progress(session) != -1)
+        fail("progress", "new session has progress");
+    atomic_init(&task.done, 0);
+    if (pthread_create(&thread, NULL, execute_thread, &task) != 0) {
+        ffmpeg_session_free(session);
+        fail("progress", "pthread_create failed");
+        return;
+    }
+    if (pthread_create(&watchdog, NULL, watchdog_thread, &watchdog_task) != 0) {
+        ffmpeg_cancel(session);
+        pthread_join(thread, NULL);
+        ffmpeg_session_free(session);
+        fail("progress", "watchdog pthread_create failed");
+        return;
+    }
+    while (!atomic_load(&task.done)) {
+        const int64_t progress = ffmpeg_session_progress(session);
+        if (progress > previous) {
+            updates++;
+            previous = progress;
+        }
+        usleep(20000);
+    }
+    pthread_join(thread, NULL);
+    pthread_join(watchdog, NULL);
+    if (task.ret == 0 && updates >= 2 && ffmpeg_session_progress(session) >= 1000000)
+        ok("progress");
+    else
+        fail("progress", "missing live or final progress");
+    ffmpeg_session_free(session);
 }
 
 static int file_equals_string(const char *path, const char *expected)
@@ -482,15 +501,13 @@ static void run_overwrite_state_reset(void)
 static int run_cancelled(const char *name, int argc, char **argv,
                          useconds_t cancel_after_us)
 {
-    HarnessStats stats;
     FfmpegSession *session;
     ExecuteTask task;
     pthread_t thread;
     pthread_t watchdog;
     WatchdogTask watchdog_task;
 
-    stats_init(&stats);
-    session = ffmpeg_session_new(progress_cb, &stats);
+    session = ffmpeg_session_new();
     if (!session) {
         fail(name, "session allocation failed");
         return -1;
@@ -520,16 +537,12 @@ static int run_cancelled(const char *name, int argc, char **argv,
 
     usleep(cancel_after_us);
     ffmpeg_cancel(session);
-    atomic_store(&stats.accept_callbacks, 0);
     pthread_join(thread, NULL);
     pthread_join(watchdog, NULL);
-    usleep(200000);
 
     if (task.ret != 255) {
         fprintf(stderr, "%s returned %d, expected 255\n", name, task.ret);
         fail(name, "unexpected cancel return code");
-    } else if (atomic_load(&stats.callbacks_after_teardown) != 0) {
-        fail(name, "progress callback after callback teardown");
     } else {
         ok(name);
     }
@@ -541,16 +554,14 @@ static int run_cancelled(const char *name, int argc, char **argv,
 static void run_overlap(int argc, char **long_argv, int short_argc,
                         char **short_argv)
 {
-    HarnessStats stats;
     FfmpegSession *long_session;
     FfmpegSession *short_session;
     ExecuteTask task;
     pthread_t thread;
     int ret;
 
-    stats_init(&stats);
-    long_session = ffmpeg_session_new(progress_cb, &stats);
-    short_session = ffmpeg_session_new(NULL, NULL);
+    long_session = ffmpeg_session_new();
+    short_session = ffmpeg_session_new();
     if (!long_session || !short_session) {
         fail("overlap", "session allocation failed");
         ffmpeg_session_free(long_session);
@@ -574,7 +585,6 @@ static void run_overlap(int argc, char **long_argv, int short_argc,
     usleep(250000);
     ret = ffmpeg_execute(short_session, short_argc, short_argv);
     ffmpeg_cancel(long_session);
-    atomic_store(&stats.accept_callbacks, 0);
     pthread_join(thread, NULL);
 
     if (ret == -EBUSY)
@@ -608,7 +618,7 @@ static void run_probe(const char *path)
 
 static void run_pre_cancelled(int argc, char **argv)
 {
-    FfmpegSession *session = ffmpeg_session_new(NULL, NULL);
+    FfmpegSession *session = ffmpeg_session_new();
     ffmpeg_cancel(session);
     const int ret = ffmpeg_execute(session, argc, argv);
     if (ret == 255 && access("overlap.mp4", F_OK) != 0)
@@ -663,7 +673,7 @@ static void run_diagnostics(void)
     };
     run_command("quiet-command", ARGC(quiet), quiet, 0);
     char *argv[] = { "ffmpeg", "-ente_nonexistent_option", NULL };
-    FfmpegSession *session = ffmpeg_session_new(NULL, NULL);
+    FfmpegSession *session = ffmpeg_session_new();
     const int ret = ffmpeg_execute(session, ARGC(argv), argv);
     const char *output = ffmpeg_session_output(session);
     if (ret != 0 && strstr(output, "ente_nonexistent_option") && strlen(output) < 8192)
@@ -846,6 +856,7 @@ int main(void)
     remove("hls-cancel.ts");
 
     run_command("success", ARGC(normal), normal, 0);
+    run_progress();
     run_pre_cancelled(ARGC(short_encode), short_encode);
     run_diagnostics();
     run_metadata_probe();
