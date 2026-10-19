@@ -38,7 +38,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake curl git libtool make pkg-config ripgrep xz-utils zip
+            autoconf automake curl git libtool make nasm pkg-config ripgrep xz-utils zip
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -60,6 +60,7 @@ jobs:
         run: |
           scripts/build-mobile.sh android-arm64
           scripts/build-mobile.sh android-armv7
+          scripts/build-mobile.sh android-x86_64
 
       - name: Package and verify AAR
         run: scripts/package-android-aar.sh

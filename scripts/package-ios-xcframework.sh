@@ -103,8 +103,8 @@ while IFS= read -r -d '' framework; do
   symbols="$WORK_ROOT/$(basename "$(dirname "$framework")")-symbols.txt"
   install_name="$WORK_ROOT/$(basename "$(dirname "$framework")")-install-name.txt"
   nm -gU "$lib" > "$symbols"
-  for symbol in _ffmpeg_session_new _ffmpeg_session_free _ffmpeg_session_output _ffmpeg_session_progress _ffmpeg_execute _ffmpeg_cancel _ffmpeg_probe_media_json _ffmpeg_free_string; do
-    rg -q "$symbol" "$symbols" || die "$lib missing symbol $symbol"
+  for symbol in "${RUNTIME_EXPORTS[@]}"; do
+    rg -q "_$symbol" "$symbols" || die "$lib missing symbol _$symbol"
   done
   otool -D "$lib" > "$install_name"
   rg -q '@rpath/FFmpegRuntime\.framework/FFmpegRuntime' "$install_name" ||

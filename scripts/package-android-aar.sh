@@ -29,7 +29,7 @@ readelf_bin="$(find_readelf)"
 require_executable "$readelf_bin"
 
 reset_dir "$stage"
-mkdir -p "$stage/jni/arm64-v8a" "$stage/jni/armeabi-v7a" "$(dirname "$output")"
+mkdir -p "$(dirname "$output")"
 cat > "$stage/AndroidManifest.xml" <<'EOF'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.ente.ffmpeg.runtime" />
 EOF
@@ -40,18 +40,20 @@ copy_abi() {
   local source="$BUILD_ROOT/$target/package/jni/$abi"
   require_mobile_build "$target"
   require_file "$source/libffmpeg_runtime.so"
+  mkdir -p "$stage/jni/$abi"
   cp "$source/libffmpeg_runtime.so" "$stage/jni/$abi/"
 }
 
 copy_abi android-arm64 arm64-v8a
 copy_abi android-armv7 armeabi-v7a
+copy_abi android-x86_64 x86_64
 
-for abi in arm64-v8a armeabi-v7a; do
+for abi in arm64-v8a armeabi-v7a x86_64; do
   wrapper="$stage/jni/$abi/libffmpeg_runtime.so"
   require_file "$wrapper"
   "$readelf_bin" -Ws "$wrapper" > "$WORK_ROOT/$abi-libffmpeg-runtime.symbols"
   "$readelf_bin" -d "$wrapper" > "$WORK_ROOT/$abi-libffmpeg-runtime.dynamic"
-  for symbol in ffmpeg_session_new ffmpeg_session_free ffmpeg_session_output ffmpeg_session_progress ffmpeg_execute ffmpeg_cancel ffmpeg_probe_media_json ffmpeg_free_string; do
+  for symbol in "${RUNTIME_EXPORTS[@]}"; do
     rg -q "[[:space:]]$symbol([[:space:]]|$)" "$WORK_ROOT/$abi-libffmpeg-runtime.symbols" ||
       die "$wrapper missing exported symbol $symbol"
   done
@@ -67,6 +69,6 @@ rm -f "$output"
   zip -Xqr "$output" AndroidManifest.xml jni
 )
 sha256_file "$output" > "$output.sha256"
-write_manifest "$output.manifest.env" "ARTIFACT=$output" "TARGETS=android-arm64 android-armv7"
+write_manifest "$output.manifest.env" "ARTIFACT=$output" "TARGETS=android-arm64 android-armv7 android-x86_64"
 
 log "packaged $output"

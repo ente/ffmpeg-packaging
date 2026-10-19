@@ -11,6 +11,17 @@ set -a
 source "$REPO_ROOT/versions.env"
 set +a
 
+RUNTIME_EXPORTS=(
+  ffmpeg_session_new
+  ffmpeg_session_free
+  ffmpeg_session_output
+  ffmpeg_session_progress
+  ffmpeg_execute
+  ffmpeg_cancel
+  ffmpeg_probe_media_json
+  ffmpeg_free_string
+)
+
 export SOURCES_ROOT="${SOURCES_ROOT:-$FFMPEG_WORKSPACE/sources}"
 export DOWNLOADS_ROOT="${DOWNLOADS_ROOT:-$FFMPEG_WORKSPACE/downloads}"
 export BUILD_ROOT="${BUILD_ROOT:-$FFMPEG_WORKSPACE/build}"
@@ -157,6 +168,12 @@ android_target_vars() {
       ANDROID_CPU=armv7-a
       ANDROID_TRIPLE=armv7a-linux-androideabi
       FFMPEG_ARCH=arm
+      ;;
+    android-x86_64)
+      ABI=x86_64
+      ANDROID_CPU=x86-64
+      ANDROID_TRIPLE=x86_64-linux-android
+      FFMPEG_ARCH=x86_64
       ;;
     *)
       die "unknown Android target: $1"

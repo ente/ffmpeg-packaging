@@ -11,6 +11,7 @@ Usage:
 Targets:
   android-arm64
   android-armv7
+  android-x86_64
   ios-device-arm64
   ios-sim-arm64
 
@@ -30,26 +31,33 @@ target_is_mobile "$target" || die "unknown mobile target: $target"
 require_cmd git
 require_cmd make
 require_cmd patch
+require_cmd pkg-config
 require_file "$(boundary_patch)"
 ensure_common_dirs
 "$REPO_ROOT/scripts/fetch-sources.sh"
 
 target_root="$BUILD_ROOT/$target"
 deps_root="$target_root/deps"
+x264_src="$target_root/x264"
+zimg_src="$target_root/zimg"
+x264_prefix="$deps_root/x264"
+zimg_prefix="$deps_root/zimg"
 ffmpeg_build="$target_root/ffmpeg"
+ffmpeg_prefix="$target_root/ffmpeg-install"
 package_root="$target_root/package"
-pkgconfig_dir="$target_root/pkgconfig"
+deps_pkgconfig="$x264_prefix/lib/pkgconfig:$zimg_prefix/lib/pkgconfig"
 reset_dir "$target_root"
-mkdir -p "$deps_root" "$pkgconfig_dir" "$package_root"
+mkdir -p "$deps_root" "$package_root"
 
-prepare_ffmpeg_tree() {
-  copy_clean_tree "$(ffmpeg_source_dir)" "$ffmpeg_build"
-  (
-    cd "$ffmpeg_build"
-    patch -p1 < "$(boundary_patch)"
-    patch -p1 < "$REPO_ROOT/patches/ffmpeg-${FFMPEG_VERSION%.*}/mobile.patch"
-  )
-}
+copy_clean_tree "$(x264_source_dir)" "$x264_src"
+(cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
+copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
+copy_clean_tree "$(ffmpeg_source_dir)" "$ffmpeg_build"
+(
+  cd "$ffmpeg_build"
+  patch -p1 < "$(boundary_patch)"
+  patch -p1 < "$REPO_ROOT/patches/ffmpeg-${FFMPEG_VERSION%.*}/mobile.patch"
+)
 
 compile_probe_wrapper() {
   local cc="$1"
@@ -70,25 +78,12 @@ write_wrapper_objects() {
 
 build_ios() {
   ios_target_vars "$target"
-  require_cmd pkg-config
-
-  local x264_src="$target_root/x264"
-  local zimg_src="$target_root/zimg"
-  local x264_prefix="$deps_root/x264"
-  local zimg_prefix="$deps_root/zimg"
-  local ffmpeg_prefix="$target_root/ffmpeg-install"
-
-  copy_clean_tree "$(x264_source_dir)" "$x264_src"
-  (cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
-  copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
 
   log "build x264 for $target"
   (
     cd "$x264_src"
-    if [ "$IOS_ARCH" = "arm64" ]; then
-      sed -i.bak 's/-arch arm64//g' configure
-      rm -f configure.bak
-    fi
+    sed -i.bak 's/-arch arm64//g' configure
+    rm -f configure.bak
     CC="$IOS_CLANG -arch $IOS_ARCH -target $IOS_TARGET $IOS_MIN_FLAG -isysroot $IOS_SDK_PATH" \
     AR="$IOS_AR" \
     RANLIB="$IOS_RANLIB" \
@@ -125,16 +120,13 @@ build_ios() {
     make -j"$JOBS" install
   )
 
-  cp "$x264_prefix/lib/pkgconfig/x264.pc" "$pkgconfig_dir/x264.pc"
-  cp "$zimg_prefix/lib/pkgconfig/zimg.pc" "$pkgconfig_dir/zimg.pc"
-  normalize_zimg_pkg_config "$pkgconfig_dir/zimg.pc" "-lc++ -lm"
-  prepare_ffmpeg_tree
+  normalize_zimg_pkg_config "$zimg_prefix/lib/pkgconfig/zimg.pc" "-lc++ -lm"
 
   log "configure FFmpeg for $target"
   (
     cd "$ffmpeg_build"
-    PKG_CONFIG_LIBDIR="$pkgconfig_dir" \
-    PKG_CONFIG_PATH="$pkgconfig_dir" \
+    PKG_CONFIG_LIBDIR="$deps_pkgconfig" \
+    PKG_CONFIG_PATH="$deps_pkgconfig" \
     ./configure \
       --prefix="$ffmpeg_prefix" \
       --target-os=darwin \
@@ -171,16 +163,7 @@ build_ios() {
     "$IOS_MIN_FLAG" \
     -isysroot "$IOS_SDK_PATH"
   write_wrapper_objects
-  cat > "$target_root/exported-symbols.txt" <<'EOF'
-_ffmpeg_session_new
-_ffmpeg_session_free
-_ffmpeg_session_output
-_ffmpeg_session_progress
-_ffmpeg_execute
-_ffmpeg_cancel
-_ffmpeg_probe_media_json
-_ffmpeg_free_string
-EOF
+  printf '_%s\n' "${RUNTIME_EXPORTS[@]}" > "$target_root/exported-symbols.txt"
 
   log "link ffmpeg_runtime.dylib for $target"
   # libswscale/framepool.c includes libavfilter/framepool.c, so libswscale.a
@@ -212,13 +195,10 @@ EOF
     -framework Security \
     -framework CoreImage \
     -o "$package_root/ffmpeg_runtime.dylib"
-
-  cp "$REPO_ROOT/include/ffmpeg_runtime.h" "$package_root/ffmpeg_runtime.h"
 }
 
 build_android() {
   android_target_vars "$target"
-  require_cmd pkg-config
 
   local ndk_root
   ndk_root="$(android_ndk_root)"
@@ -237,16 +217,6 @@ build_android() {
   local strip="$toolchain/bin/llvm-strip"
   require_executable "$clang"
   require_executable "$clangxx"
-
-  local x264_src="$target_root/x264"
-  local zimg_src="$target_root/zimg"
-  local x264_prefix="$deps_root/x264"
-  local zimg_prefix="$deps_root/zimg"
-  local ffmpeg_prefix="$target_root/ffmpeg-install"
-
-  copy_clean_tree "$(x264_source_dir)" "$x264_src"
-  (cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
-  copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
 
   log "build x264 for $target"
   (
@@ -280,16 +250,13 @@ build_android() {
     make -j"$JOBS" install
   )
 
-  cp "$x264_prefix/lib/pkgconfig/x264.pc" "$pkgconfig_dir/x264.pc"
-  cp "$zimg_prefix/lib/pkgconfig/zimg.pc" "$pkgconfig_dir/zimg.pc"
-  normalize_zimg_pkg_config "$pkgconfig_dir/zimg.pc" "-lm"
-  prepare_ffmpeg_tree
+  normalize_zimg_pkg_config "$zimg_prefix/lib/pkgconfig/zimg.pc" "-lm"
 
   log "configure FFmpeg for $target"
   (
     cd "$ffmpeg_build"
-    PKG_CONFIG_LIBDIR="$pkgconfig_dir" \
-    PKG_CONFIG_PATH="$pkgconfig_dir" \
+    PKG_CONFIG_LIBDIR="$deps_pkgconfig" \
+    PKG_CONFIG_PATH="$deps_pkgconfig" \
     ./configure \
       --prefix="$ffmpeg_prefix" \
       --target-os=android \
@@ -323,23 +290,14 @@ build_android() {
   compile_probe_wrapper "$clang"
   mkdir -p "$package_root/jni/$ABI"
   write_wrapper_objects
-  cat > "$target_root/exports.map" <<'EOF'
-{
-  global:
-    ffmpeg_session_new;
-    ffmpeg_session_free;
-    ffmpeg_session_output;
-    ffmpeg_session_progress;
-    ffmpeg_execute;
-    ffmpeg_cancel;
-    ffmpeg_probe_media_json;
-    ffmpeg_free_string;
-  local:
-    *;
-};
-EOF
+  {
+    printf '{\n  global:\n'
+    printf '    %s;\n' "${RUNTIME_EXPORTS[@]}"
+    printf '  local:\n    *;\n};\n'
+  } > "$target_root/exports.map"
   local ffmpeg_libs
-  ffmpeg_libs=$(PKG_CONFIG_LIBDIR="$ffmpeg_prefix/lib/pkgconfig:$pkgconfig_dir" \
+  ffmpeg_libs=$(PKG_CONFIG_LIBDIR="$ffmpeg_prefix/lib/pkgconfig:$deps_pkgconfig" \
+    PKG_CONFIG_PATH="$ffmpeg_prefix/lib/pkgconfig:$deps_pkgconfig" \
     pkg-config --static --libs libavdevice libavfilter libavformat libavcodec libswresample libswscale libavutil)
   local ffmpeg_link_args
   read -r -a ffmpeg_link_args <<< "$ffmpeg_libs"
@@ -352,7 +310,6 @@ EOF
     @"$target_root/fftools-objs.txt" \
     -Wl,--start-group "${ffmpeg_link_args[@]}" -Wl,--end-group \
     -o "$package_root/jni/$ABI/libffmpeg_runtime.so"
-  cp "$REPO_ROOT/include/ffmpeg_runtime.h" "$package_root/ffmpeg_runtime.h"
 }
 
 case "$target" in
