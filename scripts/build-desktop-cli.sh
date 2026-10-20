@@ -65,6 +65,7 @@ build_one_desktop() {
   copy_clean_tree "$(x264_source_dir)" "$x264_src"
   (cd "$x264_src" && patch -p1 < "$REPO_ROOT/patches/x264/encoder-open-cleanup.patch")
   copy_clean_tree "$(zimg_source_dir)" "$zimg_src"
+  (cd "$zimg_src" && patch -p1 < "$REPO_ROOT/patches/zimg/exception-header.patch")
   copy_clean_tree "$(ffmpeg_source_dir)" "$ffmpeg_build"
 
   local cc="${CC:-cc}"
